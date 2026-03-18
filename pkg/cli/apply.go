@@ -7,25 +7,26 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/tishiu/MiniIac/pkg/reconciler"
 )
 
 func (c *CLI) Apply(configPath string, autoApprove bool) error {
-	if err := c.stateManager.Lock(); err != nil {
-		return fmt.Errorf("failed to acquire lock: %w", err)
-	}
-	defer c.stateManager.Unlock()
-
 	desired, err := c.parser.Parse(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	changes, err := c.reconciler.Plan(desired)
+	plan, err := c.reconciler.Prepare(context.Background(), reconciler.Request{
+		Mode:    reconciler.ModeApply,
+		Desired: desired,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to apply changes: %w", err)
 	}
+	defer plan.Discard()
 
-	c.printPlan(changes)
+	c.printPlan(plan.Changes())
 
 	if !autoApprove {
 		fmt.Print("\nDo you want to apply these changes? (yes/no): ")
@@ -53,7 +54,7 @@ func (c *CLI) Apply(configPath string, autoApprove bool) error {
 	}()
 	defer signal.Stop(sigChan)
 
-	if err := c.reconciler.Apply(ctx, desired); err != nil {
+	if err := plan.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to apply changes: %w", err)
 	}
 

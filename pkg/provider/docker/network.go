@@ -5,21 +5,22 @@ import (
 	"github.com/tishiu/MiniIac/pkg/state"
 	"context"
 	"fmt"
-
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
 )
 
 type NetworkProvider struct {
-	client *client.Client
+	runtime DockerRuntime
 }
 
-func NewNetworkProvider() (*NetworkProvider, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+func NewNetworkProvider(runtime DockerRuntime) *NetworkProvider {
+	return &NetworkProvider{runtime: runtime}
+}
+
+func NewNetworkProviderFromEnv() (*NetworkProvider, error) {
+	runtime, err := NewRuntimeFromEnv()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+		return nil, err
 	}
-	return &NetworkProvider{client: cli}, nil
+	return NewNetworkProvider(runtime), nil
 }
 
 func (p *NetworkProvider) Create(ctx context.Context, desired *config.Resource) (*state.ResourceState, error) {
@@ -33,41 +34,41 @@ func (p *NetworkProvider) Create(ctx context.Context, desired *config.Resource) 
 		driver = driveVal
 	}
 
-	// Create network
-	resp, err := p.client.NetworkCreate(ctx, name, network.CreateOptions{
+	snap, err := p.runtime.CreateNetwork(ctx, NetworkSpec{
+		Name:   name,
 		Driver: driver,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create network: %w", err)
+		return nil, err
 	}
 
 	return &state.ResourceState{
-		ID:   resp.ID,
+		ID:   snap.ID,
 		Type: desired.Type,
 		Attributes: map[string]interface{}{
-			"network_id": resp.ID,
-			"name":       name,
-			"driver":     driver,
+			"network_id": snap.ID,
+			"name":       snap.Name,
+			"driver":     snap.Driver,
 		},
 	}, nil
 }
 
 func (p *NetworkProvider) Read(ctx context.Context, resourceID string) (*state.ResourceState, error) {
-	inspect, err := p.client.NetworkInspect(ctx, resourceID, network.InspectOptions{})
+	snap, found, err := p.runtime.InspectNetwork(ctx, resourceID)
 	if err != nil {
-		if client.IsErrNotFound(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to inspect network: %w", err)
+		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 
 	return &state.ResourceState{
-		ID:   inspect.ID,
+		ID:   snap.ID,
 		Type: "docker_network",
 		Attributes: map[string]interface{}{
-			"network_id": inspect.ID,
-			"name":       inspect.Name,
-			"driver":     inspect.Driver,
+			"network_id": snap.ID,
+			"name":       snap.Name,
+			"driver":     snap.Driver,
 		},
 	}, nil
 }
@@ -82,9 +83,5 @@ func (p *NetworkProvider) Update(ctx context.Context, desired *config.Resource, 
 }
 
 func (p *NetworkProvider) Delete(ctx context.Context, resourceID string) error {
-	err := p.client.NetworkRemove(ctx, resourceID)
-	if err != nil && !client.IsErrNotFound(err) {
-		return fmt.Errorf("failed to remove network: %w", err)
-	}
-	return nil
+	return p.runtime.DeleteNetwork(ctx, resourceID)
 }

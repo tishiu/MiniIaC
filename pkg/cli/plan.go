@@ -1,8 +1,9 @@
 package cli
 
 import (
-	"github.com/tishiu/MiniIac/pkg/reconciler"
 	"fmt"
+
+	"github.com/tishiu/MiniIac/pkg/reconciler"
 )
 
 func (c *CLI) Plan(configPath string) error {
@@ -11,12 +12,15 @@ func (c *CLI) Plan(configPath string) error {
 		return fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	changes, err := c.reconciler.Plan(desired)
+	plan, err := c.reconciler.Prepare(nil, reconciler.Request{
+		Mode:    reconciler.ModePreview,
+		Desired: desired,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to generate plan: %w", err)
 	}
 
-	c.printPlan(changes)
+	c.printPlan(plan.Changes())
 
 	return nil
 }

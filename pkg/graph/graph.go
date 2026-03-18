@@ -2,12 +2,9 @@ package graph
 
 import (
 	"github.com/tishiu/MiniIac/pkg/config"
+	"github.com/tishiu/MiniIac/pkg/reference"
 	"fmt"
-	"regexp"
 )
-
-// refPattern matches ${type.resource_id.attribute} interpolation expressions
-var refPattern = regexp.MustCompile(`\$\{(\w+)\.(\w+)\.(\w+)\}`)
 
 type Graph struct {
 	nodes map[string]*Node
@@ -47,36 +44,7 @@ func (g *Graph) Build(resources []*config.Resource) error {
 
 // ExtractReferences extracts resource IDs referenced via interpolation expressions
 func ExtractReferences(properties map[string]interface{}) []string {
-	refs := []string{}
-	seen := make(map[string]bool)
-
-	var scan func(interface{})
-	scan = func(v interface{}) {
-		switch val := v.(type) {
-		case string:
-			matches := refPattern.FindAllStringSubmatch(val, -1)
-			for _, match := range matches {
-				resourceID := match[2]
-				if !seen[resourceID] {
-					refs = append(refs, resourceID)
-					seen[resourceID] = true
-				}
-			}
-		case map[string]interface{}:
-			for _, nested := range val {
-				scan(nested)
-			}
-		case []interface{}:
-			for _, item := range val {
-				scan(item)
-			}
-		}
-	}
-
-	for _, v := range properties {
-		scan(v)
-	}
-	return refs
+	return reference.ExtractDependencies(properties)
 }
 
 // ValidateDAG checks for circular dependencies

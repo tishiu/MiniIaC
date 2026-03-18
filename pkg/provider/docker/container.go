@@ -5,23 +5,22 @@ import (
 	"github.com/tishiu/MiniIac/pkg/state"
 	"context"
 	"fmt"
-	"strconv"
-
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
 )
 
 type ContainerProvider struct {
-	client *client.Client
+	runtime DockerRuntime
 }
 
-func NewContainerProvider() (*ContainerProvider, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+func NewContainerProvider(runtime DockerRuntime) *ContainerProvider {
+	return &ContainerProvider{runtime: runtime}
+}
+
+func NewContainerProviderFromEnv() (*ContainerProvider, error) {
+	runtime, err := NewRuntimeFromEnv()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+		return nil, err
 	}
-	return &ContainerProvider{client: cli}, nil
+	return NewContainerProvider(runtime), nil
 }
 
 func (p *ContainerProvider) Create(ctx context.Context, desired *config.Resource) (*state.ResourceState, error) {
@@ -45,50 +44,20 @@ func (p *ContainerProvider) Create(ctx context.Context, desired *config.Resource
 	// Optional network_id
 	networkID, _ := desired.Properties["network_id"].(string)
 
-	containerConfig := &container.Config{
-		Image: image,
-	}
-	hostConfig := &container.HostConfig{}
-
-	if port > 0 {
-		portStr := fmt.Sprintf("%d/tcp", port)
-		containerConfig.ExposedPorts = nat.PortSet{
-			nat.Port(portStr): struct{}{},
-		}
-		hostConfig.PortBindings = nat.PortMap{
-			nat.Port(portStr): []nat.PortBinding{
-				{
-					HostIP:   "0.0.0.0",
-					HostPort: strconv.Itoa(port),
-				},
-			},
-		}
-	}
-
-	if networkID != "" {
-		hostConfig.NetworkMode = container.NetworkMode(networkID)
-	}
-
-	resp, err := p.client.ContainerCreate(
-		ctx,
-		containerConfig,
-		hostConfig,
-		nil,
-		nil,
-		desired.ID,
-	)
+	snap, err := p.runtime.CreateContainer(ctx, ContainerSpec{
+		Name:      desired.ID,
+		Image:     image,
+		Port:      port,
+		NetworkID: networkID,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create container: %w", err)
-	}
-
-	if err := p.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		return nil, fmt.Errorf("failed to start container: %w", err)
+		return nil, err
 	}
 
 	attributes := map[string]interface{}{
-		"container_id": resp.ID,
+		"container_id": snap.ID,
 		"image":        image,
-		"status":       "running",
+		"status":       snap.Status,
 	}
 
 	if port > 0 {
@@ -97,35 +66,44 @@ func (p *ContainerProvider) Create(ctx context.Context, desired *config.Resource
 	if networkID != "" {
 		attributes["network_id"] = networkID
 	}
+	if snap.IPAddress != "" {
+		attributes["ip_address"] = snap.IPAddress
+	}
 
 	return &state.ResourceState{
-		ID:         resp.ID,
+		ID:         snap.ID,
 		Type:       desired.Type,
 		Attributes: attributes,
 	}, nil
 }
 
 func (p *ContainerProvider) Read(ctx context.Context, resourceID string) (*state.ResourceState, error) {
-	inspect, err := p.client.ContainerInspect(ctx, resourceID)
+	snap, found, err := p.runtime.InspectContainer(ctx, resourceID)
 	if err != nil {
-		if client.IsErrNotFound(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to inspect container: %w", err)
+		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 
 	attributes := map[string]interface{}{
-		"container_id": inspect.ID,
-		"image":        inspect.Config.Image,
-		"status":       inspect.State.Status,
+		"container_id": snap.ID,
+		"image":        snap.Image,
+		"status":       snap.Status,
 	}
 
-	if inspect.NetworkSettings.IPAddress != "" {
-		attributes["ip_address"] = inspect.NetworkSettings.IPAddress
+	if snap.IPAddress != "" {
+		attributes["ip_address"] = snap.IPAddress
+	}
+	if snap.Port > 0 {
+		attributes["port"] = snap.Port
+	}
+	if snap.NetworkID != "" {
+		attributes["network_id"] = snap.NetworkID
 	}
 
 	return &state.ResourceState{
-		ID:         inspect.ID,
+		ID:         snap.ID,
 		Type:       "docker_container",
 		Attributes: attributes,
 	}, nil
@@ -140,19 +118,5 @@ func (p *ContainerProvider) Update(ctx context.Context, desired *config.Resource
 }
 
 func (p *ContainerProvider) Delete(ctx context.Context, resourceID string) error {
-	timeout := 10
-	err := p.client.ContainerStop(ctx, resourceID, container.StopOptions{
-		Timeout: &timeout,
-	})
-	if err != nil && !client.IsErrNotFound(err) {
-		return fmt.Errorf("failed to stop container: %w", err)
-	}
-
-	err = p.client.ContainerRemove(ctx, resourceID, container.RemoveOptions{
-		Force: true,
-	})
-	if err != nil && !client.IsErrNotFound(err) {
-		return fmt.Errorf("failed to remove container: %w", err)
-	}
-	return nil
+	return p.runtime.DeleteContainer(ctx, resourceID)
 }
