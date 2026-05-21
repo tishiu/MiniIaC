@@ -1,0 +1,30 @@
+resources:
+  - id: backend_net
+    type: docker_network
+    properties:
+      name: backend-net
+
+  - id: DB
+    type: docker_container
+    properties:
+      image: postgres:16-alpine
+      port: 5432
+      network_id: ${docker_network.backend_net.network_id}
+
+  - id: appB
+    type: docker_container
+    properties:
+      image: nginx:alpine
+      network_id: ${docker_container.DB.network_id}
+
+  - id: file
+    type: local_file
+    properties:
+      path: ./appA-image.txt
+      content: nginx:alpine
+
+  - id: appA
+    type: docker_container
+    properties:
+      image: ${local_file.file.content}
+      network_id: ${docker_container.appB.network_id}

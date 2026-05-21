@@ -3,9 +3,11 @@ package docker
 import (
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/docker/docker/api/types/container"
+	imagetypes "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
@@ -52,6 +54,11 @@ type sdkRuntime struct {
 	client *client.Client
 }
 
+type imageClient interface {
+	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (imagetypes.InspectResponse, error)
+	ImagePull(ctx context.Context, refStr string, options imagetypes.PullOptions) (io.ReadCloser, error)
+}
+
 func NewRuntimeFromEnv() (DockerRuntime, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -61,6 +68,10 @@ func NewRuntimeFromEnv() (DockerRuntime, error) {
 }
 
 func (r *sdkRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) (ContainerSnapshot, error) {
+	if err := ensureImage(ctx, r.client, spec.Image); err != nil {
+		return ContainerSnapshot{}, err
+	}
+
 	containerConfig := &container.Config{
 		Image: spec.Image,
 	}
@@ -101,6 +112,30 @@ func (r *sdkRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) (C
 		Port:      spec.Port,
 		NetworkID: spec.NetworkID,
 	}, nil
+}
+
+func ensureImage(ctx context.Context, cli imageClient, imageRef string) error {
+	if imageRef == "" {
+		return fmt.Errorf("image reference is required")
+	}
+
+	if _, err := cli.ImageInspect(ctx, imageRef); err == nil {
+		return nil
+	} else if !client.IsErrNotFound(err) {
+		return fmt.Errorf("failed to inspect image %s: %w", imageRef, err)
+	}
+
+	pullReader, err := cli.ImagePull(ctx, imageRef, imagetypes.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to pull image %s: %w", imageRef, err)
+	}
+	defer pullReader.Close()
+
+	if _, err := io.Copy(io.Discard, pullReader); err != nil {
+		return fmt.Errorf("failed to read image pull response for %s: %w", imageRef, err)
+	}
+
+	return nil
 }
 
 func (r *sdkRuntime) InspectContainer(ctx context.Context, id string) (ContainerSnapshot, bool, error) {

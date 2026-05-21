@@ -1,0 +1,6 @@
+resources:
+  - id: hello_file
+    type: local_file
+    properties:
+      path: ./hello-from-example.txt
+      content: "Hello from MiniIaC local-file example!"

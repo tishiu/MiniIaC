@@ -111,3 +111,21 @@ func TestParser_EmptyConfig(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no resources defined")
 }
+
+func TestParser_ParseBundledExamples(t *testing.T) {
+	parser := NewParser()
+
+	examplePaths := []string{
+		filepath.Join("..", "..", "example", "local-file", "main.yaml"),
+		filepath.Join("..", "..", "example", "docker-app", "main.yaml"),
+		filepath.Join("..", "..", "example", "complex-dependency", "main.yaml"),
+	}
+
+	for _, examplePath := range examplePaths {
+		t.Run(examplePath, func(t *testing.T) {
+			resources, err := parser.Parse(examplePath)
+			require.NoError(t, err)
+			assert.NotEmpty(t, resources)
+		})
+	}
+}

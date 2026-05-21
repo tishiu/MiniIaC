@@ -210,14 +210,7 @@ func (r *Reconciler) prepareDestroy(ctx context.Context) (*PreparedPlan, error) 
 		}, nil
 	}
 
-	resources := make([]*config.Resource, 0, len(currentState.Resources))
-	for logicalID, rs := range currentState.Resources {
-		resources = append(resources, &config.Resource{
-			ID:         logicalID,
-			Type:       rs.Type,
-			Properties: rs.Attributes,
-		})
-	}
+	resources := buildDestroyResources(currentState)
 
 	g := graph.NewGraph()
 	if err := g.Build(resources); err != nil {
@@ -251,6 +244,52 @@ func (r *Reconciler) prepareDestroy(ctx context.Context) (*PreparedPlan, error) 
 		changes:    changes,
 		order:      order,
 	}, nil
+}
+
+func buildDestroyResources(currentState *state.State) []*config.Resource {
+	resources := make([]*config.Resource, 0, len(currentState.Resources))
+
+	networkProviderIDToLogicalID := make(map[string]string)
+	for logicalID, rs := range currentState.Resources {
+		if rs == nil || rs.Type != "docker_network" {
+			continue
+		}
+		if rs.ID != "" {
+			networkProviderIDToLogicalID[rs.ID] = logicalID
+		}
+		if networkID, ok := rs.Attributes["network_id"].(string); ok && networkID != "" {
+			networkProviderIDToLogicalID[networkID] = logicalID
+		}
+	}
+
+	for logicalID, rs := range currentState.Resources {
+		if rs == nil {
+			continue
+		}
+
+		props := make(map[string]interface{}, len(rs.Attributes))
+		for k, v := range rs.Attributes {
+			props[k] = v
+		}
+
+		// State stores resolved provider IDs; rebuild docker references so
+		// destroy keeps dependents ahead of their dependencies.
+		if rs.Type == "docker_container" {
+			if networkID, ok := props["network_id"].(string); ok && networkID != "" {
+				if networkLogicalID, exists := networkProviderIDToLogicalID[networkID]; exists {
+					props["network_id"] = fmt.Sprintf("${docker_network.%s.network_id}", networkLogicalID)
+				}
+			}
+		}
+
+		resources = append(resources, &config.Resource{
+			ID:         logicalID,
+			Type:       rs.Type,
+			Properties: props,
+		})
+	}
+
+	return resources
 }
 
 func (r *Reconciler) commitApply(ctx context.Context, plan *PreparedPlan) error {

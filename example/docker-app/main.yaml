@@ -1,0 +1,12 @@
+resources:
+  - id: app_net
+    type: docker_network
+    properties:
+      name: miniac-app-net
+
+  - id: web
+    type: docker_container
+    properties:
+      image: nginx:alpine
+      port: 8080
+      network_id: ${docker_network.app_net.network_id}
